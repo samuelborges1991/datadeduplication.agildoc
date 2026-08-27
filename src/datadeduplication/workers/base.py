@@ -37,12 +37,12 @@ class BaseWorker(ABC):
         return 100
 
     def claim_task(self, session) -> Optional[Tarefa]:
-        """Claim a task using FOR UPDATE SKIP LOCKED."""
+        """Claim a single task using FOR UPDATE SKIP LOCKED."""
         query = text("""
             SELECT id FROM tarefas
             WHERE tipo = :tipo AND status = :status
             ORDER BY prioridade DESC
-            LIMIT :batch_size
+            LIMIT 1
             FOR UPDATE SKIP LOCKED
         """)
 
@@ -51,16 +51,14 @@ class BaseWorker(ABC):
             {
                 "tipo": self.task_type.value,
                 "status": TaskStatus.QUEUED.value,
-                "batch_size": self.batch_size,
             },
         )
 
-        task_ids = [row[0] for row in result.fetchall()]
-        if not task_ids:
+        row = result.fetchone()
+        if not row:
             return None
 
-        # Get the first task and mark as running
-        tarefa = session.get(Tarefa, task_ids[0])
+        tarefa = session.get(Tarefa, row[0])
         if tarefa:
             tarefa.status = TaskStatus.RUNNING.value
             tarefa.worker_id = self.worker_id

@@ -148,31 +148,30 @@ class Scanner:
             return None
 
     def _flush_batch(self, session) -> None:
-        """Insert batch of files and create tasks."""
+        """Insert batch of files and create tasks using bulk operations."""
         if not self._batch:
             return
 
-        for metadata in self._batch:
-            arquivo = Arquivo(**metadata)
-            session.add(arquivo)
-            session.flush()
+        # Bulk insert files
+        arquivos = [Arquivo(**metadata) for metadata in self._batch]
+        session.add_all(arquivos)
+        session.flush()
 
-            # Create hash task
-            tarefa_hash = Tarefa(
+        # Create tasks for all files
+        tarefas = []
+        for arquivo in arquivos:
+            tarefas.append(Tarefa(
                 arquivo_id=arquivo.id,
                 tipo=TaskType.HASH.value,
                 status=TaskStatus.PENDING.value,
-            )
-            session.add(tarefa_hash)
-
-            # Create analyze task
-            tarefa_analyze = Tarefa(
+            ))
+            tarefas.append(Tarefa(
                 arquivo_id=arquivo.id,
                 tipo=TaskType.ANALYZE.value,
                 status=TaskStatus.PENDING.value,
-            )
-            session.add(tarefa_analyze)
+            ))
 
+        session.add_all(tarefas)
         session.commit()
         logger.info(f"Flushed batch of {len(self._batch)} files")
         self._batch.clear()
@@ -189,13 +188,12 @@ class Scanner:
         logger.info(f"Starting scan of {self.config.raiz_analise}")
         start_time = datetime.now()
 
-        # Get existing files for resume mode
-        existing_files = set()
+        # For resume mode, we'll check existence per-batch via database query
+        existing_files_count = 0
         if resume:
             with self.db.session() as session:
-                results = session.query(Arquivo.caminho).all()
-                existing_files = {r[0] for r in results}
-            logger.info(f"Resume mode: {len(existing_files)} files already in database")
+                existing_files_count = session.query(Arquivo).count()
+            logger.info(f"Resume mode: {existing_files_count} files already in database")
 
         try:
             root = Path(self.config.raiz_analise)
@@ -207,8 +205,11 @@ class Scanner:
                     continue
 
                 filepath_str = str(filepath)
-                if resume and filepath_str in existing_files:
-                    continue
+                if resume:
+                    with self.db.session() as session:
+                        exists = session.query(Arquivo).filter(Arquivo.caminho == filepath_str).first()
+                    if exists:
+                        continue
 
                 metadata = self._process_file(filepath)
                 if metadata is None:
@@ -217,6 +218,9 @@ class Scanner:
                 self._batch.append(metadata)
                 self._total_files += 1
                 self._total_bytes += metadata["tamanho"]
+
+                if self._total_files % 1000 == 0:
+                    logger.info(f"Progress: {self._total_files} files scanned, {self._total_bytes / (1024*1024):.2f} MB")
 
                 if len(self._batch) >= self.config.batch_size:
                     with self.db.session() as session:

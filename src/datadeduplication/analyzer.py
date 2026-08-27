@@ -159,10 +159,11 @@ class Analyzer:
             List of temporary files.
         """
         with self.db.session() as session:
-            # Build LIKE conditions for each extension
+            # Build parameterized LIKE conditions
             conditions = " OR ".join(
-                [f"extensao LIKE '%{ext}'" for ext in TEMP_EXTENSIONS]
+                [f"extensao LIKE :ext_{i}" for i in range(len(TEMP_EXTENSIONS))]
             )
+            params = {f"ext_{i}": f"%{ext}" for i, ext in enumerate(TEMP_EXTENSIONS)}
 
             result = session.execute(
                 text(f"""
@@ -170,7 +171,8 @@ class Analyzer:
                     FROM arquivos
                     WHERE {conditions}
                     ORDER BY tamanho DESC
-                """)
+                """),
+                params,
             )
 
             return [

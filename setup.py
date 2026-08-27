@@ -17,5 +17,5 @@ setup(
         "mutagen>=1.47.0",
         "pandas>=2.0.0",
     ],
-    python_requires=">=3.10",
+    python_requires=">=3.9",
 )
