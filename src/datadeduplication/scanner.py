@@ -1,0 +1,246 @@
+"""Directory scanner for file metadata collection."""
+
+import hashlib
+import logging
+import os
+import stat
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional
+
+from datadeduplication.config import Config
+from datadeduplication.database import Database
+from datadeduplication.enums import TaskType, TaskStatus
+from datadeduplication.models import Arquivo, Tarefa
+
+logger = logging.getLogger(__name__)
+
+
+class Scanner:
+    """Scans directories and collects file metadata."""
+
+    def __init__(self, config: Config, db: Database):
+        self.config = config
+        self.db = db
+        self._batch: List[Dict] = []
+        self._total_files = 0
+        self._total_bytes = 0
+
+    def get_file_metadata(self, filepath: Path) -> Dict:
+        """Extract basic metadata from a file."""
+        stat_result = filepath.stat()
+        return {
+            "caminho": str(filepath),
+            "nome": filepath.name,
+            "extensao": filepath.suffix.lower(),
+            "tamanho": stat_result.st_size,
+            "data_criacao": datetime.fromtimestamp(stat_result.st_ctime),
+            "data_modificacao": datetime.fromtimestamp(stat_result.st_mtime),
+            "data_acesso": datetime.fromtimestamp(stat_result.st_atime),
+        }
+
+    def get_file_attributes(self, filepath: Path) -> str:
+        """Get Windows file attributes."""
+        attrs = []
+        try:
+            st = filepath.stat()
+            if st.st_file_attributes & stat.FILE_ATTRIBUTE_READONLY:
+                attrs.append("readonly")
+            if st.st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN:
+                attrs.append("hidden")
+            if st.st_file_attributes & stat.FILE_ATTRIBUTE_SYSTEM:
+                attrs.append("system")
+            if st.st_file_attributes & stat.FILE_ATTRIBUTE_ARCHIVE:
+                attrs.append("archive")
+        except (AttributeError, OSError):
+            pass
+        return ",".join(attrs) if attrs else "normal"
+
+    def get_file_owner(self, filepath: Path) -> str:
+        """Get file owner using ctypes."""
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            advapi32 = ctypes.windll.advapi32
+            kernel32 = ctypes.windll.kernel32
+
+            # Get file security info
+            SECURITY_INFO_OWNER = 0x00000001
+            ERROR_INSUFFICIENT_BUFFER = 122
+
+            # First call to get buffer size
+            size = wintypes.DWORD(0)
+            advapi32.GetFileSecurityW(
+                str(filepath),
+                SECURITY_INFO_OWNER,
+                None,
+                0,
+                ctypes.byref(size),
+            )
+
+            # Allocate buffer and get security descriptor
+            buf = ctypes.create_string_buffer(size.value)
+            advapi32.GetFileSecurityW(
+                str(filepath),
+                SECURITY_INFO_OWNER,
+                buf,
+                size,
+                ctypes.byref(size),
+            )
+
+            # Get owner SID
+            sid = ctypes.c_void_p()
+            defaulted = wintypes.BOOL()
+            advapi32.GetSecurityDescriptorOwner(
+                buf,
+                ctypes.byref(sid),
+                ctypes.byref(defaulted),
+            )
+
+            # Lookup account name
+            name_size = wintypes.DWORD(256)
+            domain_size = wintypes.DWORD(256)
+            name = ctypes.create_unicode_buffer(name_size.value)
+            domain = ctypes.create_unicode_buffer(domain_size.value)
+            use = wintypes.DWORD()
+
+            advapi32.LookupAccountSidW(
+                None,
+                sid,
+                name,
+                ctypes.byref(name_size),
+                domain,
+                ctypes.byref(domain_size),
+                ctypes.byref(use),
+            )
+
+            return f"{domain.value}\\{name.value}"
+        except Exception:
+            return "unknown"
+
+    def get_mime_type(self, filepath: Path) -> str:
+        """Get MIME type using mimetypes module."""
+        import mimetypes
+        mime_type, _ = mimetypes.guess_type(str(filepath))
+        return mime_type or "application/octet-stream"
+
+    def _process_file(self, filepath: Path) -> Optional[Dict]:
+        """Process a single file and return metadata dict."""
+        try:
+            if not filepath.is_file():
+                return None
+
+            if not self.config.seguir_symlinks and filepath.is_symlink():
+                return None
+
+            metadata = self.get_file_metadata(filepath)
+            metadata["atributos"] = self.get_file_attributes(filepath)
+            metadata["proprietario"] = self.get_file_owner(filepath)
+            metadata["tipo_mime"] = self.get_mime_type(filepath)
+
+            return metadata
+        except PermissionError:
+            logger.warning(f"Permission denied: {filepath}")
+            return None
+        except Exception as e:
+            logger.error(f"Error processing {filepath}: {e}")
+            return None
+
+    def _flush_batch(self, session) -> None:
+        """Insert batch of files and create tasks."""
+        if not self._batch:
+            return
+
+        for metadata in self._batch:
+            arquivo = Arquivo(**metadata)
+            session.add(arquivo)
+            session.flush()
+
+            # Create hash task
+            tarefa_hash = Tarefa(
+                arquivo_id=arquivo.id,
+                tipo=TaskType.HASH.value,
+                status=TaskStatus.PENDING.value,
+            )
+            session.add(tarefa_hash)
+
+            # Create analyze task
+            tarefa_analyze = Tarefa(
+                arquivo_id=arquivo.id,
+                tipo=TaskType.ANALYZE.value,
+                status=TaskStatus.PENDING.value,
+            )
+            session.add(tarefa_analyze)
+
+        session.commit()
+        logger.info(f"Flushed batch of {len(self._batch)} files")
+        self._batch.clear()
+
+    def scan(self, resume: bool = False) -> Dict:
+        """Scan directory recursively and collect file metadata.
+
+        Args:
+            resume: If True, skip files already in database.
+
+        Returns:
+            Dict with scan statistics.
+        """
+        logger.info(f"Starting scan of {self.config.raiz_analise}")
+        start_time = datetime.now()
+
+        # Get existing files for resume mode
+        existing_files = set()
+        if resume:
+            with self.db.session() as session:
+                results = session.query(Arquivo.caminho).all()
+                existing_files = {r[0] for r in results}
+            logger.info(f"Resume mode: {len(existing_files)} files already in database")
+
+        try:
+            root = Path(self.config.raiz_analise)
+            if not root.exists():
+                raise FileNotFoundError(f"Directory not found: {root}")
+
+            for filepath in root.rglob("*"):
+                if filepath.is_dir():
+                    continue
+
+                filepath_str = str(filepath)
+                if resume and filepath_str in existing_files:
+                    continue
+
+                metadata = self._process_file(filepath)
+                if metadata is None:
+                    continue
+
+                self._batch.append(metadata)
+                self._total_files += 1
+                self._total_bytes += metadata["tamanho"]
+
+                if len(self._batch) >= self.config.batch_size:
+                    with self.db.session() as session:
+                        self._flush_batch(session)
+
+            # Flush remaining files
+            if self._batch:
+                with self.db.session() as session:
+                    self._flush_batch(session)
+
+        except Exception as e:
+            logger.error(f"Scan failed: {e}")
+            raise
+
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds()
+
+        stats = {
+            "total_files": self._total_files,
+            "total_bytes": self._total_bytes,
+            "duration_seconds": duration,
+            "start_time": start_time.isoformat(),
+            "end_time": end_time.isoformat(),
+        }
+
+        logger.info(f"Scan completed: {self._total_files} files, {self._total_bytes} bytes in {duration:.2f}s")
+        return stats
