@@ -61,11 +61,42 @@ pip install -r requirements.txt
 
 ---
 
-## 5. Configurar o Banco MySQL
+## 5. Instalar e Configurar o Banco MySQL
 
-### 5.1 Criar o banco de dados
+### 5.1 Instalar MySQL (se não tiver)
 
-```sql
+**Opção A — MySQL Community Server (recomendado):**
+
+1. Baixe em: https://dev.mysql.com/downloads/mysql/
+2. Execute o instalador e siga o assistente
+3. Defina uma senha para o root durante a instalação
+4. Marque "Start MySQL Server at System Startup"
+
+**Opção B — XAMPP (mais fácil):**
+
+1. Baixe em: https://www.apachefriends.org/download.html
+2. Execute o instalador
+3. No painel XAMPP, inicie o serviço "MySQL"
+
+**Opção C — Docker:**
+
+```bash
+docker run --name mysql-dedup -e MYSQL_ROOT_PASSWORD=rootpass -p 3306:3306 -d mysql:8.0
+```
+
+### 5.2 Verificar se MySQL está rodando
+
+```bash
+# Windows (PowerShell)
+Get-Service -Name "*mysql*"
+
+# Ou testar conexão
+mysql -u root -p -e "SELECT VERSION();"
+```
+
+### 5.3 Criar o banco de dados
+
+```bash
 mysql -u root -p
 ```
 
