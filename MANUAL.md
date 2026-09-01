@@ -1,13 +1,15 @@
 # Manual de Instalação e Uso — Data Deduplication Tool
 
+> **Nota:** No Windows, use `py` em vez de `python` se o comando `python` não for encontrado. O `py` é o Python Launcher for Windows.
+
 ## 1. Requisitos Prévios
 
 | Requisito | Versão Mínima | Verificar |
 |-----------|---------------|-----------|
-| Python | 3.10+ | `python --version` |
+| Python | 3.9+ | `py --version` |
 | MySQL | 8.0+ | `mysql --version` |
 | Git | qualquer | `git --version` |
-| pip | atualizado | `python -m pip --version` |
+| pip | atualizado | `py -m pip --version` |
 
 > **Importante:** MySQL 8+ é obrigatório para suporte a `FOR UPDATE SKIP LOCKED`.
 
@@ -26,7 +28,7 @@ cd datadeduplication.agildoc
 
 ```bash
 # Windows
-python -m venv venv
+py -m venv venv
 venv\Scripts\activate
 
 # Linux/Mac (se necessário)
@@ -132,7 +134,7 @@ LOG_FILE=datadeduplication.log
 ### 7.1 Verificar ajuda
 
 ```bash
-python -m datadeduplication --help
+py -m datadeduplication --help
 ```
 
 ### 7.2 Fluxo Completo
@@ -145,10 +147,10 @@ O uso envolve 4 etapas que rodam em **terminais separados**:
 
 ```bash
 # Varredura completa do diretório
-python -m datadeduplication scan --path "C:\dados"
+py -m datadeduplication scan --path "C:\dados"
 
 # Retomar varredura interrompida
-python -m datadeduplication scan --path "C:\dados" --resume
+py -m datadeduplication scan --path "C:\dados" --resume
 ```
 
 ---
@@ -157,10 +159,10 @@ python -m datadeduplication scan --path "C:\dados" --resume
 
 ```bash
 # Rodar continuamente (padrão: 30s entre ciclos)
-python -m datadeduplication orchestrate
+py -m datadeduplication orchestrate
 
 # Com intervalo customizado (60 segundos)
-python -m datadeduplication orchestrate --interval 60
+py -m datadeduplication orchestrate --interval 60
 ```
 
 ---
@@ -169,10 +171,10 @@ python -m datadeduplication orchestrate --interval 60
 
 ```bash
 # Worker padrão
-python -m datadeduplication worker-hash
+py -m datadeduplication worker-hash
 
 # Com batch size customizado
-python -m datadeduplication worker-hash --batch-size 200
+py -m datadeduplication worker-hash --batch-size 200
 ```
 
 ---
@@ -181,10 +183,10 @@ python -m datadeduplication worker-hash --batch-size 200
 
 ```bash
 # Worker padrão
-python -m datadeduplication worker-analyze
+py -m datadeduplication worker-analyze
 
 # Com batch size customizado
-python -m datadeduplication worker-analyze --batch-size 100
+py -m datadeduplication worker-analyze --batch-size 100
 ```
 
 ---
@@ -193,31 +195,31 @@ python -m datadeduplication worker-analyze --batch-size 100
 
 ```bash
 # Arquivos duplicados (mesmo hash SHA-256)
-python -m datadeduplication analyze --type duplicates
+py -m datadeduplication analyze --type duplicates
 
 # Arquivos duplicados com tamanho mínimo (1MB)
-python -m datadeduplication analyze --type duplicates --min-size 1048576
+py -m datadeduplication analyze --type duplicates --min-size 1048576
 
 # Arquivos grandes (>500MB)
-python -m datadeduplication analyze --type large --limit 500MB
+py -m datadeduplication analyze --type large --limit 500MB
 
 # Arquivos não acessados há mais de 1 ano
-python -m datadeduplication analyze --type old --days 365
+py -m datadeduplication analyze --type old --days 365
 
 # Arquivos temporários (.tmp, .bak, .old, .log, etc.)
-python -m datadeduplication analyze --type temp
+py -m datadeduplication analyze --type temp
 
 # Arquivos vazios (0 bytes)
-python -m datadeduplication analyze --type empty
+py -m datadeduplication analyze --type empty
 
 # Busca por conteúdo nos metadados
-python -m datadeduplication analyze --type search --keyword "contrato"
+py -m datadeduplication analyze --type search --keyword "contrato"
 
 # Exportar relatório para JSON
-python -m datadeduplication analyze --type duplicates --output duplicados.json
+py -m datadeduplication analyze --type duplicates --output duplicados.json
 
 # Exportar relatório para CSV
-python -m datadeduplication analyze --type large --output grandes.csv --format csv
+py -m datadeduplication analyze --type large --output grandes.csv --format csv
 ```
 
 ---
@@ -226,13 +228,13 @@ python -m datadeduplication analyze --type large --output grandes.csv --format c
 
 ```bash
 # Listar arquivos em quarentena
-python -m datadeduplication quarantine --list
+py -m datadeduplication quarantine --list
 
 # Simular quarentena (dry-run — não move nada)
-python -m datadeduplication quarantine --from-report duplicados.json --dry-run
+py -m datadeduplication quarantine --from-report duplicados.json --dry-run
 
 # Mover arquivos para quarentena
-python -m datadeduplication quarantine --from-report duplicados.json
+py -m datadeduplication quarantine --from-report duplicados.json
 ```
 
 ---
@@ -241,7 +243,7 @@ python -m datadeduplication quarantine --from-report duplicados.json
 
 ```bash
 # Excluir permanentemente (REQUER --confirm)
-python -m datadeduplication clean --from-report duplicados.json --confirm
+py -m datadeduplication clean --from-report duplicados.json --confirm
 ```
 
 > **Atenção:** Esta operação é irreversível. Use sempre `quarantine --dry-run` antes.
@@ -254,35 +256,35 @@ python -m datadeduplication clean --from-report duplicados.json --confirm
 # 1. Clonar e instalar
 git clone https://github.com/samuelborges1991/datadeduplication.agildoc.git
 cd datadeduplication.agildoc
-python -m venv venv
+py -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env
 # Editar .env com suas configurações
 
 # 2. Varredura (Terminal 1)
-python -m datadeduplication scan --path "C:\Users\Documentos"
+py -m datadeduplication scan --path "C:\Users\Documentos"
 
 # 3. Orquestrador (Terminal 2)
-python -m datadeduplication orchestrate
+py -m datadeduplication orchestrate
 
 # 4. Workers (Terminais 3 e 4)
-python -m datadeduplication worker-hash
-python -m datadeduplication worker-analyze
+py -m datadeduplication worker-hash
+py -m datadeduplication worker-analyze
 
 # 5. Após workers finalizarem, gerar relatórios
-python -m datadeduplication analyze --type duplicates --output duplicados.json
-python -m datadeduplication analyze --type old --days 180 --output antigos.json
-python -m datadeduplication analyze --type temp --output temporarios.json
+py -m datadeduplication analyze --type duplicates --output duplicados.json
+py -m datadeduplication analyze --type old --days 180 --output antigos.json
+py -m datadeduplication analyze --type temp --output temporarios.json
 
 # 6. Revisar antes de agir
-python -m datadeduplication quarantine --from-report duplicados.json --dry-run
+py -m datadeduplication quarantine --from-report duplicados.json --dry-run
 
 # 7. Mover para quarentena
-python -m datadeduplication quarantine --from-report duplicados.json
+py -m datadeduplication quarantine --from-report duplicados.json
 
 # 8. Excluir (após revisão cuidadosa)
-python -m datadeduplication clean --from-report duplicados.json --confirm
+py -m datadeduplication clean --from-report duplicados.json --confirm
 ```
 
 ---
@@ -321,7 +323,7 @@ datadeduplication.agildoc/
 
 ```bash
 # Execute a partir da raiz do projeto
-python -m datadeduplication --help
+py -m datadeduplication --help
 ```
 
 ### Erro: `Access denied for user` (MySQL)
@@ -360,7 +362,7 @@ Verifique se o orquestrador está rodando (Terminal 2). Ele move tarefas de `pen
 
 | Ação | Comando |
 |------|---------|
-| Verificar ajuda | `python -m datadeduplication --help` |
-| Verificar versão | `python -c "import datadeduplication; print(datadeduplication.__version__)"` |
-| Rodar testes | `pytest tests/ -v` |
+| Verificar ajuda | `py -m datadeduplication --help` |
+| Verificar versão | `py -c "import datadeduplication; print(datadeduplication.__version__)"` |
+| Rodar testes | `py -m pytest tests/ -v` |
 | Limpar cache Python | `Get-ChildItem -Recurse -Directory -Filter __pycache__ \| Remove-Item -Recurse -Force` |
