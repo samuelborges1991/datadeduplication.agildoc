@@ -41,8 +41,14 @@ source venv/bin/activate
 ## 4. Instalar Dependências
 
 ```bash
+# Instalar o pacote em modo desenvolvimento (obrigatório)
+pip install -e .
+
+# Ou instalar apenas as dependências
 pip install -r requirements.txt
 ```
+
+> **Importante:** O comando `pip install -e .` é obrigatório para que o comando `py -m datadeduplication` funcione de qualquer diretório.
 
 ### Dependências incluídas:
 
@@ -289,7 +295,7 @@ git clone https://github.com/samuelborges1991/datadeduplication.agildoc.git
 cd datadeduplication.agildoc
 py -m venv venv
 venv\Scripts\activate
-pip install -r requirements.txt
+pip install -e .
 cp .env.example .env
 # Editar .env com suas configurações
 
