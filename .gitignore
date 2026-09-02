@@ -36,6 +36,10 @@ env/
 # Logs
 *.log
 
+# Checkpoint files
+.scan_checkpoint.json
+.scan_checkpoint.tmp
+
 # Environment variables
 .env
 

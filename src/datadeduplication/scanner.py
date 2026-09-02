@@ -1,6 +1,7 @@
 """Directory scanner for file metadata collection."""
 
 import hashlib
+import json
 import logging
 import os
 import signal
@@ -16,6 +17,9 @@ from datadeduplication.models import Arquivo, Tarefa
 
 logger = logging.getLogger(__name__)
 
+# Checkpoint file location
+CHECKPOINT_FILE = ".scan_checkpoint.json"
+
 
 class Scanner:
     """Scans directories and collects file metadata."""
@@ -27,6 +31,7 @@ class Scanner:
         self._total_files = 0
         self._total_bytes = 0
         self._interrupted = False
+        self._checkpoint_path = Path(config.raiz_analise) / CHECKPOINT_FILE
         self._setup_signal_handlers()
 
     def _setup_signal_handlers(self) -> None:
@@ -39,6 +44,46 @@ class Scanner:
         sig_name = signal.Signals(signum).name
         logger.warning(f"Received signal {sig_name}, finishing current batch...")
         self._interrupted = True
+
+    def _save_checkpoint(self, last_file: str) -> None:
+        """Save checkpoint to file for crash recovery."""
+        try:
+            checkpoint_data = {
+                "last_file": last_file,
+                "total_files": self._total_files,
+                "total_bytes": self._total_bytes,
+                "timestamp": datetime.now().isoformat(),
+                "raiz_analise": str(self.config.raiz_analise),
+            }
+            # Write to temp file first, then rename (atomic on most systems)
+            temp_path = self._checkpoint_path.with_suffix(".tmp")
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(checkpoint_data, f, indent=2)
+            temp_path.replace(self._checkpoint_path)
+            logger.debug(f"Checkpoint saved: {last_file}")
+        except Exception as e:
+            logger.warning(f"Failed to save checkpoint: {e}")
+
+    def _load_checkpoint(self) -> Optional[Dict]:
+        """Load checkpoint from file if exists."""
+        try:
+            if self._checkpoint_path.exists():
+                with open(self._checkpoint_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                logger.info(f"Checkpoint found: last file was {data.get('last_file')}")
+                return data
+        except Exception as e:
+            logger.warning(f"Failed to load checkpoint: {e}")
+        return None
+
+    def _clear_checkpoint(self) -> None:
+        """Remove checkpoint file after successful scan."""
+        try:
+            if self._checkpoint_path.exists():
+                self._checkpoint_path.unlink()
+                logger.debug("Checkpoint file removed")
+        except Exception as e:
+            logger.warning(f"Failed to remove checkpoint: {e}")
 
     def get_file_metadata(self, filepath: Path) -> Dict:
         """Extract basic metadata from a file."""
@@ -194,7 +239,7 @@ class Scanner:
         """Scan directory recursively and collect file metadata.
 
         Args:
-            resume: If True, skip files already in database.
+            resume: If True, skip files already in database and use checkpoint.
 
         Returns:
             Dict with scan statistics.
@@ -202,17 +247,24 @@ class Scanner:
         logger.info(f"Starting scan of {self.config.raiz_analise}")
         start_time = datetime.now()
 
-        # For resume mode, we'll check existence per-batch via database query
-        existing_files_count = 0
+        # Load checkpoint for resume mode
+        checkpoint = None
+        checkpoint_file = None
         if resume:
-            with self.db.session() as session:
-                existing_files_count = session.query(Arquivo).count()
-            logger.info(f"Resume mode: {existing_files_count} files already in database")
+            checkpoint = self._load_checkpoint()
+            if checkpoint:
+                checkpoint_file = checkpoint.get("last_file")
+                self._total_files = checkpoint.get("total_files", 0)
+                self._total_bytes = checkpoint.get("total_bytes", 0)
+                logger.info(f"Resuming from checkpoint: {checkpoint_file} ({self._total_files} files processed)")
 
         try:
             root = Path(self.config.raiz_analise)
             if not root.exists():
                 raise FileNotFoundError(f"Directory not found: {root}")
+
+            skip_until_checkpoint = checkpoint_file is not None
+            files_since_checkpoint = 0
 
             for filepath in root.rglob("*"):
                 # Check for interruption
@@ -224,6 +276,15 @@ class Scanner:
                     continue
 
                 filepath_str = str(filepath)
+
+                # Skip until we reach the checkpoint file
+                if skip_until_checkpoint:
+                    if filepath_str == checkpoint_file:
+                        skip_until_checkpoint = False
+                        logger.info(f"Reached checkpoint file, continuing scan...")
+                    continue
+
+                # Check if file already exists in database (for resume after crash)
                 if resume:
                     with self.db.session() as session:
                         exists = session.query(Arquivo).filter(Arquivo.caminho == filepath_str).first()
@@ -237,6 +298,7 @@ class Scanner:
                 self._batch.append(metadata)
                 self._total_files += 1
                 self._total_bytes += metadata["tamanho"]
+                files_since_checkpoint += 1
 
                 if self._total_files % 1000 == 0:
                     logger.info(f"Progress: {self._total_files} files scanned, {self._total_bytes / (1024*1024):.2f} MB")
@@ -244,11 +306,21 @@ class Scanner:
                 if len(self._batch) >= self.config.batch_size:
                     with self.db.session() as session:
                         self._flush_batch(session)
+                    # Save checkpoint after successful batch commit
+                    self._save_checkpoint(filepath_str)
+                    files_since_checkpoint = 0
 
             # Flush remaining files
             if self._batch:
                 with self.db.session() as session:
                     self._flush_batch(session)
+                # Save checkpoint for remaining files
+                if self._batch:
+                    self._save_checkpoint(str(self._batch[-1]["caminho"]))
+
+            # Clear checkpoint on successful completion
+            if not self._interrupted:
+                self._clear_checkpoint()
 
         except Exception as e:
             logger.error(f"Scan failed: {e}")
