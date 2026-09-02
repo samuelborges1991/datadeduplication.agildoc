@@ -40,8 +40,17 @@ def setup_logging(config: Config) -> None:
 def cmd_scan(args, config: Config, db: Database) -> None:
     """Execute scan command."""
     scanner = Scanner(config, db)
-    stats = scanner.scan(resume=args.resume)
-    print(json.dumps(stats, indent=2))
+    try:
+        stats = scanner.scan(resume=args.resume)
+        print(json.dumps(stats, indent=2))
+    except KeyboardInterrupt:
+        print("\nScan interrupted. Saving progress...")
+        # Scanner already handles saving partial batch via signal handler
+        print("Use --resume to continue from where it stopped.")
+    except Exception as e:
+        logging.error(f"Scan failed: {e}", exc_info=True)
+        print(f"Error: {e}")
+        sys.exit(1)
 
 
 def cmd_orchestrate(args, config: Config, db: Database) -> None:

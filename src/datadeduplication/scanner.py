@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import os
+import signal
 import stat
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +26,19 @@ class Scanner:
         self._batch: List[Dict] = []
         self._total_files = 0
         self._total_bytes = 0
+        self._interrupted = False
+        self._setup_signal_handlers()
+
+    def _setup_signal_handlers(self) -> None:
+        """Setup signal handlers for graceful shutdown."""
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+
+    def _signal_handler(self, signum, frame) -> None:
+        """Handle interrupt signals gracefully."""
+        sig_name = signal.Signals(signum).name
+        logger.warning(f"Received signal {sig_name}, finishing current batch...")
+        self._interrupted = True
 
     def get_file_metadata(self, filepath: Path) -> Dict:
         """Extract basic metadata from a file."""
@@ -201,6 +215,11 @@ class Scanner:
                 raise FileNotFoundError(f"Directory not found: {root}")
 
             for filepath in root.rglob("*"):
+                # Check for interruption
+                if self._interrupted:
+                    logger.warning("Scan interrupted by user, saving partial progress...")
+                    break
+
                 if filepath.is_dir():
                     continue
 
@@ -233,6 +252,14 @@ class Scanner:
 
         except Exception as e:
             logger.error(f"Scan failed: {e}")
+            # Save partial batch on error
+            if self._batch:
+                logger.info(f"Saving {len(self._batch)} files from partial batch...")
+                try:
+                    with self.db.session() as session:
+                        self._flush_batch(session)
+                except Exception as flush_error:
+                    logger.error(f"Failed to save partial batch: {flush_error}")
             raise
 
         end_time = datetime.now()
@@ -244,7 +271,11 @@ class Scanner:
             "duration_seconds": duration,
             "start_time": start_time.isoformat(),
             "end_time": end_time.isoformat(),
+            "interrupted": self._interrupted,
         }
 
-        logger.info(f"Scan completed: {self._total_files} files, {self._total_bytes} bytes in {duration:.2f}s")
+        if self._interrupted:
+            logger.warning(f"Scan interrupted: {self._total_files} files processed before interruption")
+        else:
+            logger.info(f"Scan completed: {self._total_files} files, {self._total_bytes} bytes in {duration:.2f}s")
         return stats
